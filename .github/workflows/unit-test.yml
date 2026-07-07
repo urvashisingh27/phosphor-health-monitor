@@ -1,87 +1,72 @@
-name: OpenBMC Unit Test
+name: OpenBMC Official CI
 
 on:
   push:
     branches:
       - master
       - main
-      - "**"
 
   pull_request:
     branches:
       - master
       - main
-      - "**"
 
 jobs:
-  build-test:
-    name: Build, Test and Coverage
-
+  unit-test:
     runs-on: ubuntu-latest
 
-    container:
-      image: openbmc/ubuntu-unit-test:2026-W28-e196b916356bfee1
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout project
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Show Tool Versions
-        run: |
-          gcc --version
-          g++ --version
-          meson --version
-          ninja --version
+      - name: Checkout OpenBMC Build Scripts
+        uses: actions/checkout@v4
+        with:
+          repository: openbmc/openbmc-build-scripts
+          path: openbmc-build-scripts
 
-      - name: Configure Project
+      - name: Build Official Docker Image
         run: |
-          meson setup builddir
+          cd openbmc-build-scripts
+          chmod +x scripts/build-unit-test-docker
+          ./scripts/build-unit-test-docker
 
-      - name: Build
+      - name: Show Docker Images
+        run: docker images
+
+      - name: Run Build/Test Inside Docker
         run: |
-          ninja -C builddir
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            $(docker images --format "{{.Repository}}:{{.Tag}}" | grep '^openbmc/ubuntu-unit-test:' | head -n1) \
+            bash -c "
+              meson setup builddir &&
+              ninja -C builddir &&
+              meson test -C builddir --print-errorlogs
+            "
 
-      - name: Run Unit Tests
+      - name: Generate Coverage
         run: |
-          meson test -C builddir --print-errorlogs || true
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            $(docker images --format "{{.Repository}}:{{.Tag}}" | grep '^openbmc/ubuntu-unit-test:' | head -n1) \
+            bash -c '
+              lcov \
+                --capture \
+                --directory builddir \
+                --output-file coverage.info \
+                --ignore-errors mismatch
 
-      - name: Remove Previous Coverage
-        run: |
-          find builddir -name "*.gcda" -delete || true
+              genhtml \
+                coverage.info \
+                --output-directory coverage-html
+            '
 
-      - name: Run Tests Again For Coverage
-        run: |
-          meson test -C builddir --print-errorlogs || true
-
-      - name: Generate LCOV
-        run: |
-          lcov \
-            --capture \
-            --directory builddir \
-            --output-file coverage_raw.info \
-            --ignore-errors mismatch \
-            --rc branch_coverage=1
-
-      - name: Filter Coverage
-        run: |
-          lcov \
-            --remove coverage_raw.info \
-            '/usr/*' \
-            '*/subprojects/*' \
-            '*/test/*' \
-            --output-file coverage.info \
-            --rc branch_coverage=1
-
-      - name: Generate HTML Coverage
-        run: |
-          genhtml \
-            coverage.info \
-            --branch-coverage \
-            --output-directory coverage-html
-
-      - name: Upload Coverage HTML
+      - name: Upload Coverage
         uses: actions/upload-artifact@v4
         with:
           name: coverage-html
@@ -92,9 +77,3 @@ jobs:
         with:
           name: coverage-info
           path: coverage.info
-
-      - name: Upload Build Directory
-        uses: actions/upload-artifact@v4
-        with:
-          name: builddir
-          path: builddir
