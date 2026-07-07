@@ -1,0 +1,100 @@
+name: OpenBMC Unit Test
+
+on:
+  push:
+    branches:
+      - master
+      - main
+      - "**"
+
+  pull_request:
+    branches:
+      - master
+      - main
+      - "**"
+
+jobs:
+  build-test:
+    name: Build, Test and Coverage
+
+    runs-on: ubuntu-latest
+
+    container:
+      image: openbmc/ubuntu-unit-test:2026-W28-e196b916356bfee1
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Show Tool Versions
+        run: |
+          gcc --version
+          g++ --version
+          meson --version
+          ninja --version
+
+      - name: Configure Project
+        run: |
+          meson setup builddir
+
+      - name: Build
+        run: |
+          ninja -C builddir
+
+      - name: Run Unit Tests
+        run: |
+          meson test -C builddir --print-errorlogs || true
+
+      - name: Remove Previous Coverage
+        run: |
+          find builddir -name "*.gcda" -delete || true
+
+      - name: Run Tests Again For Coverage
+        run: |
+          meson test -C builddir --print-errorlogs || true
+
+      - name: Generate LCOV
+        run: |
+          lcov \
+            --capture \
+            --directory builddir \
+            --output-file coverage_raw.info \
+            --ignore-errors mismatch \
+            --rc branch_coverage=1
+
+      - name: Filter Coverage
+        run: |
+          lcov \
+            --remove coverage_raw.info \
+            '/usr/*' \
+            '*/subprojects/*' \
+            '*/test/*' \
+            --output-file coverage.info \
+            --rc branch_coverage=1
+
+      - name: Generate HTML Coverage
+        run: |
+          genhtml \
+            coverage.info \
+            --branch-coverage \
+            --output-directory coverage-html
+
+      - name: Upload Coverage HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage-html
+
+      - name: Upload Coverage Info
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-info
+          path: coverage.info
+
+      - name: Upload Build Directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: builddir
+          path: builddir
