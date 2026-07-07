@@ -1,4 +1,4 @@
-name: OpenBMC Official CI
+name: Phosphor Health Monitor CI
 
 on:
   push:
@@ -12,72 +12,72 @@ on:
       - main
 
 jobs:
-  unit-test:
+  build-test:
+
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout project
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: Checkout OpenBMC Build Scripts
-        uses: actions/checkout@v4
-        with:
-          repository: openbmc/openbmc-build-scripts
-          path: openbmc-build-scripts
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
-      - name: Install Python Requirements
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip
-          python3 -m pip install --upgrade pip
-          pip3 install sh
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
 
-      - name: Build Official Docker Image
-        run: |
-          cd openbmc-build-scripts
-          ./scripts/build-unit-test-docker
+        sudo apt-get install -y \
+          meson \
+          ninja-build \
+          pkg-config \
+          gcc \
+          g++ \
+          lcov \
+          libgtest-dev \
+          libgmock-dev \
+          libsystemd-dev \
+          libboost-all-dev
 
-      - name: Show Docker Images
-        run: |
-          docker images
+    - name: Show Tool Versions
+      run: |
+        gcc --version
+        g++ --version
+        meson --version
+        ninja --version
 
-      - name: Run Build/Test Inside Docker
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace \
-            openbmc/ubuntu-unit-test:latest \
-            bash -c "
-              meson setup builddir &&
-              ninja -C builddir &&
-              meson test -C builddir --print-errorlogs || true
-            "
+    - name: Configure
+      run: |
+        meson setup builddir
 
-      - name: Generate Coverage
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace \
-            openbmc/ubuntu-unit-test:latest \
-            bash -c "
-              lcov --capture \
-                --directory builddir \
-                --output-file coverage.info || true
+    - name: Build
+      run: |
+        ninja -C builddir
 
-              genhtml coverage.info \
-                --output-directory coverage-html || true
-            "
+    - name: Run Unit Tests
+      run: |
+        meson test -C builddir --print-errorlogs
 
-      - name: Upload Coverage
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-html
-          path: coverage-html
+    - name: Generate Coverage
+      run: |
+        ninja -C builddir coverage || true
 
-      - name: Upload Coverage Info
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-info
-          path: coverage.info
+        if [ -f builddir/meson-logs/coveragereport/index.html ]; then
+          cp -r builddir/meson-logs/coveragereport coverage-html
+        fi
+
+    - name: Upload Coverage Report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-html
+        path: coverage-html
+        if-no-files-found: ignore
+
+    - name: Upload Meson Logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: meson-logs
+        path: builddir/meson-logs
+        if-no-files-found: ignore
